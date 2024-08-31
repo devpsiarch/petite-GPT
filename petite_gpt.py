@@ -49,6 +49,8 @@ test_data = data[n:]
 
 #defining block size aka context lenght
 block_size = 8
+n_embed = 32
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
 print(train_data[:block_size+1])
 
 #more explinication of the context lenght
@@ -107,13 +109,22 @@ import torch.nn as nn
 from torch.nn import functional as F
 
 class BigrameLM(nn.Module):
-  def __init__(self,vocabolary_size):
+  def __init__(self):
     super().__init__()
-    self.token_embadding_table = nn.Embedding(vocabolary_size,vocabolary_size)
+    self.token_embadding_table = nn.Embedding(vocabolary_size,n_embed)
+    self.position_embeding_table = nn.Embedding(block_size,n_embed)
+    self.lm_head = nn.Linear(n_embed,vocabolary_size)
+
+
+
 
   def feedforward(self,idx,expected=None):
+    B, T = idx.shape
     #basiclly what we got from feeding forward into the model
-    logits = self.token_embadding_table(idx)
+    token_emb = self.token_embadding_table(idx)
+    #pos_emb = self.position_embeding_table(torch.arange(T,device=device))
+    #x = token_emb + pos_emb
+    logits = self.lm_head(token_emb)
 
     if expected == None:
       cost = None
@@ -137,7 +148,7 @@ class BigrameLM(nn.Module):
       idx = torch.cat((idx,idx_next),dim=1)
     return idx
 
-m = BigrameLM(vocabolary_size)
+m = BigrameLM()
 logits,cost = m.feedforward(xb,yb)
 print(logits.shape)
 print(f"the loss/cost of the model is {cost}")
@@ -161,4 +172,66 @@ print(estimate_loss())
 print(decode(m.generate(torch.zeros((1,1),dtype=torch.long),max_token=500)[0].tolist()))
 
 """# Math trick for self-attention"""
+
+#we now want the tokens to be able to speak to each other in a sense , per say get spacial information about past tokens
+#easist and simplist way is to just avrage sum the past tokens
+B,T,C = 4,8,2
+x = torch.randn(B,T,C)
+print(x.shape)
+
+#we can use the older fashion way
+test = torch.zeros(B,T,C)
+for i in range(B):
+  for j in range(T):
+    xprev = x[i,:j+1]
+    test[i,j] = torch.mean(xprev,0)
+
+print(x[0])
+print(test[0])
+
+#but there is a more efficant way to do that using "batch matrix multiplication" notice ...
+a = torch.tril(torch.ones(3,3))
+a = a / torch.sum(a,1,keepdim=True)
+b = torch.randint(0,10,(3,2)).float()
+c = a @ b
+print(a)
+print(b)
+print(c)
+#when we use a tril matrix the resulting matrix becomes a sort of depth sum:
+#6           7
+#6+9         7+4
+#6+9+8       7+4+2
+#to avrage them like we want we just gotta devide the starting a matrix with the number of ones it has
+
+wei = torch.tril(torch.ones(T,T))
+wei = wei / wei.sum(1,keepdim=True)
+xbow = wei @ x
+
+#as we cna see they are the same
+print(xbow[0])
+print(test[0])
+
+#another fancy way to do the same again
+B,T,C = 4,8,32
+head_size = 16
+x = torch.randn(B,T,C)
+
+key = nn.Linear(C,head_size,bias=False)
+query = nn.Linear(C,head_size,bias=False)
+
+k = key(x)  #both are (B,T,16)
+q = query(x)
+
+wei = q @ k.transpose(-2,-1) # becomes (B,16,T)
+
+
+tril = torch.tril(torch.ones(T,T))
+#wei = torch.zeros((T,T))
+wei = wei.masked_fill(tril == 0 ,float('-inf'))
+print(wei[0])
+wei = F.softmax(wei,dim=1)
+out = wei @ x
+
+print(out.shape)
+print(wei[0])
 
